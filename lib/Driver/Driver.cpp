@@ -1,8 +1,8 @@
-//===-- Driver.cpp - Swift compiler driver --------------------------------===//
+//===--- Driver.cpp - Swift compiler driver -------------------------------===//
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2015 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See http://swift.org/LICENSE.txt for license information
@@ -1234,14 +1234,8 @@ void Driver::buildActions(const ToolChain &TC,
         break;
       }
     }
-    SWIFT_FALLTHROUGH;
-  }
-  case OutputInfo::Mode::Immediate: {
-    if (Inputs.empty())
-      return;
 
     // Create a single CompileJobAction for all of the driver's inputs.
-    // Don't create a CompileJobAction if there are no inputs, though.
     std::unique_ptr<Action> CA(new CompileJobAction(OI.CompilerOutputType));
     for (const InputPair &Input : Inputs) {
       types::ID InputType = Input.first;
@@ -1252,6 +1246,21 @@ void Driver::buildActions(const ToolChain &TC,
     AllModuleInputs.push_back(CA.get());
     AllLinkerInputs.push_back(CA.release());
     break;
+  }
+  case OutputInfo::Mode::Immediate: {
+    if (Inputs.empty())
+      return;
+
+    assert(OI.CompilerOutputType == types::TY_Nothing);
+    std::unique_ptr<Action> CA(new InterpretJobAction());
+    for (const InputPair &Input : Inputs) {
+      types::ID InputType = Input.first;
+      const Arg *InputArg = Input.second;
+
+      CA->addInput(new InputAction(*InputArg, InputType));
+    }
+    Actions.push_back(CA.release());
+    return;
   }
   case OutputInfo::Mode::REPL: {
     if (!Inputs.empty()) {
@@ -1368,7 +1377,7 @@ Driver::buildOutputFileMap(const llvm::opt::DerivedArgList &Args) const {
     // TODO: emit diagnostic with error string
     Diags.diagnose(SourceLoc(), diag::error_unable_to_load_output_file_map);
   }
-  return std::move(OFM);
+  return OFM;
 }
 
 void Driver::buildJobs(const ActionList &Actions, const OutputInfo &OI,
@@ -1980,7 +1989,7 @@ void Driver::printActions(const ActionList &Actions) const {
 
 void Driver::printJobs(const Compilation &C) const {
   for (const Job *J : C.getJobs())
-    J->printCommandLine(llvm::outs());
+    J->printCommandLineAndEnvironment(llvm::outs());
 }
 
 void Driver::printVersion(const ToolChain &TC, raw_ostream &OS) const {
@@ -2026,11 +2035,10 @@ const ToolChain *Driver::getToolChain(const ArgList &Args) const {
     case llvm::Triple::WatchOS:
       TC = new toolchains::Darwin(*this, Target);
       break;
-#if defined(SWIFT_ENABLE_TARGET_LINUX)
     case llvm::Triple::Linux:
-      TC = new toolchains::Linux(*this, Target);
+    case llvm::Triple::FreeBSD:
+      TC = new toolchains::GenericUnix(*this, Target);
       break;
-#endif // SWIFT_ENABLE_TARGET_LINUX
     default:
       TC = nullptr;
     }
