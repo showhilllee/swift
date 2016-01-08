@@ -50,11 +50,9 @@ const uint16_t VERSION_MAJOR = 0;
 /// When the format changes IN ANY WAY, this number should be incremented.
 /// To ensure that two separate changes don't silently get merged into one
 /// in source control, you should also update the comment to briefly
-/// describe what change you made.
-///
-/// Last change: Added support for multiple @_semantic attributes on
-/// SILFunctions.
-const uint16_t VERSION_MINOR = 226;
+/// describe what change you made. The content of this comment isn't important;
+/// it just ensures a conflict if two people change the module format.
+const uint16_t VERSION_MINOR = 230; // alloc_global instruction added
 
 using DeclID = Fixnum<31>;
 using DeclIDField = BCFixed<31>;
@@ -269,8 +267,11 @@ enum class DefaultArgumentKind : uint8_t {
   Function,
   Inherited,
   DSOHandle,
+  Nil,
+  EmptyArray,
+  EmptyDictionary,
 };
-using DefaultArgumentField = BCFixed<3>;
+using DefaultArgumentField = BCFixed<4>;
 
 // These IDs must \em not be renumbered or reordered without incrementing
 // VERSION_MAJOR.
@@ -1003,7 +1004,6 @@ namespace decls_block {
     DeclIDField,           // ParamDecl
     BCFixed<1>,            // isVariadic?
     DefaultArgumentField   // default argument
-    // The element pattern trails the record.
     >;
 
   using ParenPatternLayout = BCRecordLayout<
@@ -1130,10 +1130,10 @@ namespace decls_block {
     BCVBR<5>, // inherited conformances count
     BCVBR<5>, // defaulted definitions count
     BCArray<DeclIDField>
-    // The array contains value-value-substitutionCount triplets,
+    // The array contains archetype-value pairs,
     // then type declarations, then defaulted definitions.
     // Inherited conformances follow, then the substitution records for the
-    // values and then types.
+    // associated types.
   >;
 
   using SpecializedProtocolConformanceLayout = BCRecordLayout<

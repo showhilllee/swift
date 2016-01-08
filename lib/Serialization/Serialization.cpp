@@ -752,6 +752,9 @@ static uint8_t getRawStableDefaultArgumentKind(swift::DefaultArgumentKind kind) 
   CASE(Line)
   CASE(Function)
   CASE(DSOHandle)
+  CASE(Nil)
+  CASE(EmptyArray)
+  CASE(EmptyDictionary)
 #undef CASE
   }
 }
@@ -1036,8 +1039,6 @@ void Serializer::writeNormalConformance(
     data.push_back(addDeclRef(witness.getDecl()));
     assert(witness.getDecl() || req->getAttrs().hasAttribute<OptionalAttr>()
            || req->getAttrs().isUnavailable(req->getASTContext()));
-    // The substitution records are serialized later.
-    data.push_back(witness.getSubstitutions().size());
     ++numValueWitnesses;
   });
 
@@ -1084,11 +1085,6 @@ void Serializer::writeNormalConformance(
                      DeclTypeAbbrCodes);
   }
 
-  conformance->forEachValueWitness(nullptr,
-                                   [&](ValueDecl *req,
-                                       ConcreteDeclRef witness) {
-    writeSubstitutions(witness.getSubstitutions(), DeclTypeAbbrCodes);
-  });
   conformance->forEachTypeWitness(/*resolver=*/nullptr,
                                   [&](AssociatedTypeDecl *assocType,
                                       const Substitution &witness,
@@ -3691,8 +3687,7 @@ void Serializer::writeAST(ModuleOrSourceFile DC) {
       hasLocalTypes = true;
 
       Mangle::Mangler DebugMangler(false);
-      DebugMangler.mangleType(TD->getDeclaredType(),
-                              ResilienceExpansion::Minimal, 0);
+      DebugMangler.mangleType(TD->getDeclaredType(), 0);
       auto MangledName = DebugMangler.finalize();
       assert(!MangledName.empty() && "Mangled type came back empty!");
       localTypeGenerator.insert(MangledName, {

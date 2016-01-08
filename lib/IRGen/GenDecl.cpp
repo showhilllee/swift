@@ -1420,7 +1420,7 @@ Address IRGenModule::getAddrOfSILGlobalVariable(SILGlobalVariable *var,
 
     llvm::Constant *addr = gvar;
     if (ti.getStorageType() != gvar->getType()->getElementType()) {
-      auto *expectedTy = ti.StorageType->getPointerTo();
+      auto *expectedTy = ti.getStorageType()->getPointerTo();
       addr = llvm::ConstantExpr::getBitCast(addr, expectedTy);
     }
     return Address(addr, Alignment(gvar->getAlignment()));
@@ -1431,7 +1431,7 @@ Address IRGenModule::getAddrOfSILGlobalVariable(SILGlobalVariable *var,
     // If we have the VarDecl, use it for more accurate debugging information.
     DebugTypeInfo DbgTy(var->getDecl(),
                         var->getLoweredType().getSwiftType(), ti);
-    gvar = link.createVariable(*this, ti.StorageType,
+    gvar = link.createVariable(*this, ti.getStorageType(),
                                ti.getFixedAlignment(),
                                DbgTy, SILLocation(var->getDecl()),
                                var->getDecl()->getName().str());
@@ -1444,7 +1444,8 @@ Address IRGenModule::getAddrOfSILGlobalVariable(SILGlobalVariable *var,
     Optional<SILLocation> loc;
     if (var->hasLocation())
       loc = var->getLocation();
-    gvar = link.createVariable(*this, ti.StorageType, ti.getFixedAlignment(),
+    gvar = link.createVariable(*this, ti.getStorageType(),
+                               ti.getFixedAlignment(),
                                DbgTy, loc, var->getName());
   }
   
@@ -2388,7 +2389,6 @@ Address IRGenModule::getAddrOfWitnessTableOffset(SILDeclRef code,
                                                 ForDefinition_t forDefinition) {
   LinkEntity entity =
     LinkEntity::forWitnessTableOffset(code.getDecl(),
-                                      code.getResilienceExpansion(),
                                       code.uncurryLevel);
   return getAddrOfSimpleVariable(*this, GlobalVars, entity,
                                  SizeTy, getPointerAlignment(),
@@ -2401,7 +2401,7 @@ Address IRGenModule::getAddrOfWitnessTableOffset(SILDeclRef code,
 Address IRGenModule::getAddrOfWitnessTableOffset(VarDecl *field,
                                                 ForDefinition_t forDefinition) {
   LinkEntity entity =
-    LinkEntity::forWitnessTableOffset(field, ResilienceExpansion::Minimal, 0);
+    LinkEntity::forWitnessTableOffset(field, 0);
   return ::getAddrOfSimpleVariable(*this, GlobalVars, entity,
                                    SizeTy, getPointerAlignment(),
                                    forDefinition);
@@ -2615,36 +2615,38 @@ StringRef IRGenModule::mangleType(CanType type, SmallVectorImpl<char> &buffer) {
 /// - For enums, new cases can be added
 /// - For classes, the superclass might change the size or number
 ///   of stored properties
-bool IRGenModule::isResilient(Decl *D, ResilienceScope scope) {
+bool IRGenModule::isResilient(Decl *D, ResilienceExpansion expansion) {
   auto NTD = dyn_cast<NominalTypeDecl>(D);
   if (!NTD)
     return false;
 
-  switch (scope) {
-  case ResilienceScope::Component:
+  switch (expansion) {
+  case ResilienceExpansion::Maximal:
     return !NTD->hasFixedLayout(SILMod->getSwiftModule());
-  case ResilienceScope::Universal:
+  case ResilienceExpansion::Minimal:
     return !NTD->hasFixedLayout();
   }
 
   llvm_unreachable("Bad resilience scope");
 }
 
-// The most general resilience scope where the given declaration is visible.
-ResilienceScope IRGenModule::getResilienceScopeForAccess(NominalTypeDecl *decl) {
+// The most general resilience expansion where the given declaration is visible.
+ResilienceExpansion
+IRGenModule::getResilienceExpansionForAccess(NominalTypeDecl *decl) {
   if (decl->getModuleContext() == SILMod->getSwiftModule() &&
       decl->getFormalAccess() != Accessibility::Public)
-    return ResilienceScope::Component;
-  return ResilienceScope::Universal;
+    return ResilienceExpansion::Maximal;
+  return ResilienceExpansion::Minimal;
 }
 
-// The most general resilience scope which has knowledge of the declaration's
+// The most general resilience expansion which has knowledge of the declaration's
 // layout. Calling isResilient() with this scope will always return false.
-ResilienceScope IRGenModule::getResilienceScopeForLayout(NominalTypeDecl *decl) {
-  if (isResilient(decl, ResilienceScope::Universal))
-    return ResilienceScope::Component;
+ResilienceExpansion
+IRGenModule::getResilienceExpansionForLayout(NominalTypeDecl *decl) {
+  if (isResilient(decl, ResilienceExpansion::Minimal))
+    return ResilienceExpansion::Maximal;
 
-  return getResilienceScopeForAccess(decl);
+  return getResilienceExpansionForAccess(decl);
 }
 
 llvm::Constant *IRGenModule::

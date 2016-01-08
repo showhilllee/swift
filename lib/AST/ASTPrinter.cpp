@@ -1268,6 +1268,13 @@ void PrintAST::visitExtensionDecl(ExtensionDecl *decl) {
           Printer << ".";
         }
       }
+
+      // Respect alias type.
+      if (extendedType->getKind() == TypeKind::NameAlias) {
+        extendedType.print(Printer, Options);
+        return;
+      }
+
       Printer.printTypeRef(nominal, nominal->getName());
     });
   printInherited(decl);
@@ -1655,18 +1662,14 @@ void PrintAST::printOneParameter(const ParamDecl *param, bool Curried,
   
   if (Options.PrintDefaultParameterPlaceholder &&
       param->isDefaultArgument()) {
-    // For Clang declarations, figure out the default we're using.
-    auto AFD = dyn_cast<AbstractFunctionDecl>(param->getDeclContext());
-    if (AFD && AFD->getClangDecl() && param->hasType()) {
-      auto CurrType = param->getType();
-      Printer << " = " << CurrType->getInferredDefaultArgString();
-    } else {
-      // Use placeholder anywhere else.
-      Printer << " = default";
-    }
+    Printer << " = ";
+    auto defaultArgStr
+      = getDefaultArgumentSpelling(param->getDefaultArgumentKind());
+    if (defaultArgStr.empty())
+      Printer << "default";
+    else
+      Printer << defaultArgStr;
   }
-
-  
 }
 
 void PrintAST::printParameterList(ParameterList *PL, bool isCurried,

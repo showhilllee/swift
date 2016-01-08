@@ -746,7 +746,7 @@ resolveTopLevelIdentTypeComponent(TypeChecker &TC, DeclContext *DC,
       }
     }
 
-    if (!DC->isCascadingContextForLookup(/*excludeFunctions*/true))
+    if (!DC->isCascadingContextForLookup(/*excludeFunctions*/false))
       options |= TR_KnownNonCascadingDependency;
 
     // The remaining lookups will be in the parent context.
@@ -1220,7 +1220,7 @@ Type TypeChecker::resolveIdentifierType(
 
   // We allow a type to conform to a protocol that is less available than
   // the type itself. This enables a type to retroactively model or directly
-  // conform to a protocl only available on newer OSes and yet still be used on
+  // conform to a protocol only available on newer OSes and yet still be used on
   // older OSes.
   // To support this, inside inheritance clauses we allow references to
   // protocols that are unavailable in the current type refinement context.
@@ -1758,13 +1758,6 @@ Type TypeResolver::resolveAttributedType(TypeAttributes &attrs,
     attrs.clearAttribute(TAK_box);
   }
   
-  // Diagnose @local_storage in nested positions.
-  if (attrs.has(TAK_local_storage)) {
-    assert(DC->getParentSourceFile()->Kind == SourceFileKind::SIL);
-    TC.diagnose(attrs.getLoc(TAK_local_storage),diag::sil_local_storage_nested);
-    attrs.clearAttribute(TAK_local_storage);
-  }
-
   for (unsigned i = 0; i != TypeAttrKind::TAK_Count; ++i)
     if (attrs.has((TypeAttrKind)i))
       TC.diagnose(attrs.getLoc((TypeAttrKind)i),

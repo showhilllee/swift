@@ -334,7 +334,6 @@ static void print(raw_ostream &OS, SILValueCategory category) {
   switch (category) {
   case SILValueCategory::Object: return;
   case SILValueCategory::Address: OS << '*'; return;
-  case SILValueCategory::LocalStorage: OS << "*@local_storage "; return;
   }
   llvm_unreachable("bad value category!");
 }
@@ -820,6 +819,15 @@ public:
     
     *this << ") : ";
     *this << BI->getType();
+  }
+  
+  void visitAllocGlobalInst(AllocGlobalInst *AGI) {
+    *this << "alloc_global ";
+    if (AGI->getReferencedGlobal()) {
+      AGI->getReferencedGlobal()->printName(PrintState.OS);
+    } else {
+      *this << "<<placeholder>>";
+    }
   }
   
   void visitGlobalAddrInst(GlobalAddrInst *GAI) {

@@ -273,7 +273,7 @@ namespace {
 /// tables to be dependently-generated?
 static bool isDependentConformance(IRGenModule &IGM,
                              const NormalProtocolConformance *conformance,
-                                   ResilienceScope resilienceScope) {
+                                   ResilienceExpansion expansion) {
   // If the conforming type isn't dependent, this is never true.
   if (!conformance->getDeclContext()->isGenericContext())
     return false;
@@ -291,7 +291,7 @@ static bool isDependentConformance(IRGenModule &IGM,
   // Check whether any of the associated types are dependent.
   for (auto &entry : conformance->getInheritedConformances()) {
     if (isDependentConformance(IGM, entry.second->getRootNormalConformance(),
-                               resilienceScope)) {
+                               expansion)) {
       return true;
     }
   }
@@ -559,14 +559,18 @@ static void emitDynamicPackingOperation(IRGenFunction &IGF,
   IGF.Builder.CreateCondBr(isInline, directBB, indirectBB);
 
   // Emit the indirect path.
-  IGF.Builder.emitBlock(indirectBB);
-  operation.emitForPacking(IGF, T, type, FixedPacking::Allocate);
-  IGF.Builder.CreateBr(contBB);
+  IGF.Builder.emitBlock(indirectBB); {
+    ConditionalDominanceScope condition(IGF);
+    operation.emitForPacking(IGF, T, type, FixedPacking::Allocate);
+    IGF.Builder.CreateBr(contBB);
+  }
 
   // Emit the direct path.
-  IGF.Builder.emitBlock(directBB);
-  operation.emitForPacking(IGF, T, type, FixedPacking::OffsetZero);
-  IGF.Builder.CreateBr(contBB);
+  IGF.Builder.emitBlock(directBB); {
+    ConditionalDominanceScope condition(IGF);
+    operation.emitForPacking(IGF, T, type, FixedPacking::OffsetZero);
+    IGF.Builder.CreateBr(contBB);
+  }
 
   // Enter the continuation block and add the PHI if required.
   IGF.Builder.emitBlock(contBB);
@@ -973,6 +977,7 @@ static void buildValueWitnessFunction(IRGenModule &IGM,
     IGF.Builder.CreateCondBr(done, exit, loop);
 
     IGF.Builder.emitBlock(loop);
+    ConditionalDominanceScope condition(IGF);
     type.destroy(IGF, element, concreteType);
     auto nextCounter = IGF.Builder.CreateSub(counter,
                                      llvm::ConstantInt::get(IGM.SizeTy, 1));
@@ -1420,25 +1425,25 @@ static llvm::Constant *getValueWitness(IRGenModule &IGM,
     goto standard;
 
   case ValueWitness::DestroyBuffer:
-    if (concreteTI.isPOD(ResilienceScope::Component)) {
+    if (concreteTI.isPOD(ResilienceExpansion::Maximal)) {
       if (isNeverAllocated(packing))
         return asOpaquePtr(IGM, getNoOpVoidFunction(IGM));
-    } else if (concreteTI.isSingleSwiftRetainablePointer(ResilienceScope::Component)) {
+    } else if (concreteTI.isSingleSwiftRetainablePointer(ResilienceExpansion::Maximal)) {
       assert(isNeverAllocated(packing));
       return asOpaquePtr(IGM, getDestroyStrongFunction(IGM));
     }
     goto standard;
 
   case ValueWitness::Destroy:
-    if (concreteTI.isPOD(ResilienceScope::Component)) {
+    if (concreteTI.isPOD(ResilienceExpansion::Maximal)) {
       return asOpaquePtr(IGM, getNoOpVoidFunction(IGM));
-    } else if (concreteTI.isSingleSwiftRetainablePointer(ResilienceScope::Component)) {
+    } else if (concreteTI.isSingleSwiftRetainablePointer(ResilienceExpansion::Maximal)) {
       return asOpaquePtr(IGM, getDestroyStrongFunction(IGM));
     }
     goto standard;
 
   case ValueWitness::DestroyArray:
-    if (concreteTI.isPOD(ResilienceScope::Component)) {
+    if (concreteTI.isPOD(ResilienceExpansion::Maximal)) {
       return asOpaquePtr(IGM, getNoOpVoidFunction(IGM));
     }
     // TODO: A standard "destroy strong array" entrypoint for arrays of single
@@ -1448,9 +1453,9 @@ static llvm::Constant *getValueWitness(IRGenModule &IGM,
   case ValueWitness::InitializeBufferWithCopyOfBuffer:
   case ValueWitness::InitializeBufferWithCopy:
     if (packing == FixedPacking::OffsetZero) {
-      if (concreteTI.isPOD(ResilienceScope::Component)) {
+      if (concreteTI.isPOD(ResilienceExpansion::Maximal)) {
         return asOpaquePtr(IGM, getMemCpyFunction(IGM, concreteTI));
-      } else if (concreteTI.isSingleSwiftRetainablePointer(ResilienceScope::Component)) {
+      } else if (concreteTI.isSingleSwiftRetainablePointer(ResilienceExpansion::Maximal)) {
         return asOpaquePtr(IGM, getInitWithCopyStrongFunction(IGM));
       }
     }
@@ -1460,61 +1465,61 @@ static llvm::Constant *getValueWitness(IRGenModule &IGM,
     if (packing == FixedPacking::Allocate) {
       return asOpaquePtr(IGM, getCopyOutOfLinePointerFunction(IGM));
     } else if (packing == FixedPacking::OffsetZero &&
-               concreteTI.isBitwiseTakable(ResilienceScope::Component)) {
+               concreteTI.isBitwiseTakable(ResilienceExpansion::Maximal)) {
       return asOpaquePtr(IGM, getMemCpyFunction(IGM, concreteTI));
     }
     goto standard;
 
   case ValueWitness::InitializeBufferWithTake:
-    if (concreteTI.isBitwiseTakable(ResilienceScope::Component)
+    if (concreteTI.isBitwiseTakable(ResilienceExpansion::Maximal)
         && packing == FixedPacking::OffsetZero)
       return asOpaquePtr(IGM, getMemCpyFunction(IGM, concreteTI));
     goto standard;
 
   case ValueWitness::InitializeWithTake:
-    if (concreteTI.isBitwiseTakable(ResilienceScope::Component)) {
+    if (concreteTI.isBitwiseTakable(ResilienceExpansion::Maximal)) {
       return asOpaquePtr(IGM, getMemCpyFunction(IGM, concreteTI));
     }
     goto standard;
 
   case ValueWitness::InitializeArrayWithTakeFrontToBack:
-    if (concreteTI.isBitwiseTakable(ResilienceScope::Component)) {
+    if (concreteTI.isBitwiseTakable(ResilienceExpansion::Maximal)) {
       return asOpaquePtr(IGM, getMemMoveArrayFunction(IGM, concreteTI));
     }
     goto standard;
 
   case ValueWitness::InitializeArrayWithTakeBackToFront:
-    if (concreteTI.isBitwiseTakable(ResilienceScope::Component)) {
+    if (concreteTI.isBitwiseTakable(ResilienceExpansion::Maximal)) {
       return asOpaquePtr(IGM, getMemMoveArrayFunction(IGM, concreteTI));
     }
     goto standard;
 
   case ValueWitness::AssignWithCopy:
-    if (concreteTI.isPOD(ResilienceScope::Component)) {
+    if (concreteTI.isPOD(ResilienceExpansion::Maximal)) {
       return asOpaquePtr(IGM, getMemCpyFunction(IGM, concreteTI));
-    } else if (concreteTI.isSingleSwiftRetainablePointer(ResilienceScope::Component)) {
+    } else if (concreteTI.isSingleSwiftRetainablePointer(ResilienceExpansion::Maximal)) {
       return asOpaquePtr(IGM, getAssignWithCopyStrongFunction(IGM));
     }
     goto standard;
 
   case ValueWitness::AssignWithTake:
-    if (concreteTI.isPOD(ResilienceScope::Component)) {
+    if (concreteTI.isPOD(ResilienceExpansion::Maximal)) {
       return asOpaquePtr(IGM, getMemCpyFunction(IGM, concreteTI));
-    } else if (concreteTI.isSingleSwiftRetainablePointer(ResilienceScope::Component)) {
+    } else if (concreteTI.isSingleSwiftRetainablePointer(ResilienceExpansion::Maximal)) {
       return asOpaquePtr(IGM, getAssignWithTakeStrongFunction(IGM));
     }
     goto standard;
 
   case ValueWitness::InitializeWithCopy:
-    if (concreteTI.isPOD(ResilienceScope::Component)) {
+    if (concreteTI.isPOD(ResilienceExpansion::Maximal)) {
       return asOpaquePtr(IGM, getMemCpyFunction(IGM, concreteTI));
-    } else if (concreteTI.isSingleSwiftRetainablePointer(ResilienceScope::Component)) {
+    } else if (concreteTI.isSingleSwiftRetainablePointer(ResilienceExpansion::Maximal)) {
       return asOpaquePtr(IGM, getInitWithCopyStrongFunction(IGM));
     }
     goto standard;
 
   case ValueWitness::InitializeArrayWithCopy:
-    if (concreteTI.isPOD(ResilienceScope::Component)) {
+    if (concreteTI.isPOD(ResilienceExpansion::Maximal)) {
       return asOpaquePtr(IGM, getMemCpyArrayFunction(IGM, concreteTI));
     }
     // TODO: A standard "copy strong array" entrypoint for arrays of single
@@ -1542,7 +1547,7 @@ static llvm::Constant *getValueWitness(IRGenModule &IGM,
     // meaningful flags for it.
     if (auto *fixedTI = dyn_cast<FixedTypeInfo>(&concreteTI)) {
       flags |= fixedTI->getFixedAlignment().getValue() - 1;
-      if (!fixedTI->isPOD(ResilienceScope::Component))
+      if (!fixedTI->isPOD(ResilienceExpansion::Maximal))
         flags |= ValueWitnessFlags::IsNonPOD;
       assert(packing == FixedPacking::OffsetZero ||
              packing == FixedPacking::Allocate);
@@ -1552,7 +1557,7 @@ static llvm::Constant *getValueWitness(IRGenModule &IGM,
       if (fixedTI->getFixedExtraInhabitantCount(IGM) > 0)
         flags |= ValueWitnessFlags::Enum_HasExtraInhabitants;
 
-      if (!fixedTI->isBitwiseTakable(ResilienceScope::Component))
+      if (!fixedTI->isBitwiseTakable(ResilienceExpansion::Maximal))
         flags |= ValueWitnessFlags::IsNonBitwiseTakable;
     }
 
@@ -1838,8 +1843,7 @@ namespace {
           }
         } callback;
         Fulfillments->searchTypeMetadata(*IGM.SILMod->getSwiftModule(),
-                                         ConcreteType,
-                                         FulfillmentMap::IsExact,
+                                         ConcreteType, IsExact,
                                          /*sourceIndex*/ 0, MetadataPath(),
                                          callback);
       }
@@ -2340,8 +2344,8 @@ llvm::Constant *IRGenModule::emitFixedTypeLayout(CanType t,
   unsigned size = ti.getFixedSize().getValue();
   unsigned align = ti.getFixedAlignment().getValue();
 
-  bool pod = ti.isPOD(ResilienceScope::Component);
-  bool bt = ti.isBitwiseTakable(ResilienceScope::Component);
+  bool pod = ti.isPOD(ResilienceExpansion::Maximal);
+  bool bt = ti.isBitwiseTakable(ResilienceExpansion::Maximal);
   unsigned numExtraInhabitants = ti.getFixedExtraInhabitantCount(*this);
 
   // Try to use common type layouts exported by the runtime.
@@ -2493,7 +2497,7 @@ ProtocolInfo::getConformance(IRGenModule &IGM, ProtocolDecl *protocol,
   // TODO: maybe this should apply whenever it's out of the module?
   // TODO: actually enable this
   if (isDependentConformance(IGM, normalConformance,
-                             ResilienceScope::Component)) {
+                             ResilienceExpansion::Maximal)) {
     info = new AccessorConformanceInfo(normalConformance);
 
   // Otherwise, we can use a direct-referencing conformance.
@@ -2702,7 +2706,7 @@ namespace {
       auto paramType = FnType->getParameters()[0].getType();
       Sources.emplace_back(SourceKind::Metadata, 0, paramType);
 
-      considerType(paramType, FulfillmentMap::IsInexact, 0, MetadataPath());
+      considerType(paramType, IsInexact, 0, MetadataPath());
     }
 
     ArrayRef<Source> getSources() const { return Sources; }
@@ -2741,8 +2745,7 @@ namespace {
     }
 
     void considerNewTypeSource(SourceKind kind, unsigned paramIndex,
-                               CanType type,
-                               FulfillmentMap::IsExact_t isExact) {
+                               CanType type, IsExact_t isExact) {
       if (!Fulfillments.isInterestingTypeForFulfillments(type)) return;
 
       // Prospectively add a source.
@@ -2755,7 +2758,7 @@ namespace {
       }
     }
 
-    bool considerType(CanType type, FulfillmentMap::IsExact_t isExact,
+    bool considerType(CanType type, IsExact_t isExact,
                       unsigned sourceIndex, MetadataPath &&path) {
       struct Callback : FulfillmentMap::InterestingKeysCallback {
         PolymorphicConvention &Self;
@@ -2789,8 +2792,7 @@ namespace {
       if (auto paramTy = dyn_cast<GenericTypeParamType>(selfTy))
         considerWitnessParamType(paramTy);
       else
-        considerType(selfTy, FulfillmentMap::IsInexact,
-                     Sources.size() - 1, MetadataPath());
+        considerType(selfTy, IsInexact, Sources.size() - 1, MetadataPath());
     }
 
     void considerParameter(SILParameterInfo param, unsigned paramIndex,
@@ -2811,8 +2813,7 @@ namespace {
         if (!isSelfParameter) return;
         if (type->getNominalOrBoundGenericNominal()) {
           considerNewTypeSource(SourceKind::GenericLValueMetadata,
-                                paramIndex, type,
-                                FulfillmentMap::IsExact);
+                                paramIndex, type, IsExact);
         }
         return;
 
@@ -2823,7 +2824,7 @@ namespace {
         // Classes are sources of metadata.
         if (type->getClassOrBoundGenericClass()) {
           considerNewTypeSource(SourceKind::ClassPointer, paramIndex, type,
-                                FulfillmentMap::IsInexact);
+                                IsInexact);
           return;
         }
 
@@ -2834,7 +2835,7 @@ namespace {
 
           CanType objTy = metatypeTy.getInstanceType();
           considerNewTypeSource(SourceKind::Metadata, paramIndex, objTy,
-                                FulfillmentMap::IsInexact);
+                                IsInexact);
           return;
         }
 
@@ -2956,7 +2957,7 @@ namespace {
 
         // Mark this as the cached metatype for the l-value's object type.
         CanType argTy = getArgTypeInContext(source.getParamIndex());
-        IGF.setUnscopedLocalTypeData(argTy, LocalTypeData::forMetatype(),
+        IGF.setUnscopedLocalTypeData(argTy, LocalTypeDataKind::forMetatype(),
                                      metatype);
         return metatype;
       }
@@ -2969,7 +2970,7 @@ namespace {
         // Mark this as the cached metatype for Self.
         CanType argTy = getArgTypeInContext(FnType->getParameters().size() - 1);
         IGF.setUnscopedLocalTypeData(argTy,
-                                     LocalTypeData::forMetatype(), metatype);
+                                    LocalTypeDataKind::forMetatype(), metatype);
         return metatype;
       }
           
@@ -3260,7 +3261,7 @@ void irgen::emitPolymorphicParametersForGenericValueWitness(IRGenFunction &IGF,
   EmitPolymorphicParameters(IGF, ntd).emitForGenericValueWitness(selfMeta);
   // Register the 'Self' argument as generic metadata for the type.
   IGF.setUnscopedLocalTypeData(ntd->getDeclaredTypeInContext()->getCanonicalType(),
-                               LocalTypeData::forMetatype(), selfMeta);
+                               LocalTypeDataKind::forMetatype(), selfMeta);
 }
 
 /// Get the next argument and use it as the 'self' type metadata.
@@ -3442,14 +3443,13 @@ void NecessaryBindings::save(IRGenFunction &IGF, Address buffer) const {
 
     // Find the metatype for the appropriate archetype and store it in
     // the slot.
-    llvm::Value *metatype =
-      IGF.getLocalTypeData(CanType(archetype), LocalTypeData::forMetatype());
+    llvm::Value *metatype = IGF.getLocalTypeData(CanType(archetype),
+                                              LocalTypeDataKind::forMetatype());
     IGF.Builder.CreateStore(metatype, slot);
 
     // Find the witness tables for the archetype's protocol constraints and
     // store them in the slot.
-    for (unsigned protocolI : indices(archetype->getConformsTo())) {
-      auto protocol = archetype->getConformsTo()[protocolI];
+    for (auto protocol : archetype->getConformsTo()) {
       if (!Lowering::TypeConverter::protocolRequiresWitnessTable(protocol))
         continue;
       Address witnessSlot = IGF.Builder.CreateConstArrayGEP(buffer, metadataI,
@@ -3459,7 +3459,7 @@ void NecessaryBindings::save(IRGenFunction &IGF, Address buffer) const {
       ++metadataI;
       llvm::Value *witness =
         IGF.getLocalTypeData(CanType(archetype),
-                         LocalTypeData::forArchetypeProtocolWitness(protocolI));
+                 LocalTypeDataKind::forArchetypeProtocolWitnessTable(protocol));
       IGF.Builder.CreateStore(witness, witnessSlot);
     }
   }

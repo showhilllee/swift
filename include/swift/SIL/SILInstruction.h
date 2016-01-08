@@ -460,14 +460,14 @@ public:
   };
   void setArgNo(unsigned N) { VarInfo.setArgNo(N); }
 
+  /// getType() is ok since this is known to only have one type.
+  SILType getType(unsigned i = 0) const { return ValueBase::getType(i); }
+  
   /// getElementType - Get the type of the allocated memory (as opposed to the
-  /// (second) type of the instruction itself, which will be an address type).
+  /// type of the instruction itself, which will be an address type).
   SILType getElementType() const {
-    return getType(1).getObjectType();
+    return getType().getObjectType();
   }
-
-  SILValue getContainerResult() const { return SILValue(this, 0); }
-  SILValue getAddressResult() const { return SILValue(this, 1); }
 
   ArrayRef<Operand> getAllOperands() const { return {}; }
   MutableArrayRef<Operand> getAllOperands() { return {}; }
@@ -1120,10 +1120,40 @@ public:
   }
 };
   
-/// Gives the address of a SIL global variable.
-class GlobalAddrInst : public LiteralInst {
+/// Initializes a SIL global variable. Only valid once, before any
+/// usages of the global via GlobalAddrInst.
+class AllocGlobalInst : public SILInstruction {
   friend class SILBuilder;
 
+  SILGlobalVariable *Global;
+
+  AllocGlobalInst(SILDebugLocation *DebugLoc, SILGlobalVariable *Global);
+
+public:
+  // FIXME: This constructor should be private but is currently used
+  //        in the SILParser.
+
+  /// Create a placeholder instruction with an unset global reference.
+  AllocGlobalInst(SILDebugLocation *DebugLoc);
+
+  /// Return the referenced global variable.
+  SILGlobalVariable *getReferencedGlobal() const { return Global; }
+  
+  void setReferencedGlobal(SILGlobalVariable *v) { Global = v; }
+
+  ArrayRef<Operand> getAllOperands() const { return {}; }
+  MutableArrayRef<Operand> getAllOperands() { return {}; }
+
+  static bool classof(const ValueBase *V) {
+    return V->getKind() == ValueKind::AllocGlobalInst;
+  }
+};
+
+/// Gives the address of a SIL global variable. Only valid after an
+/// AllocGlobalInst.
+class GlobalAddrInst : public LiteralInst {
+  friend class SILBuilder;
+  
   SILGlobalVariable *Global;
 
   GlobalAddrInst(SILDebugLocation *DebugLoc, SILGlobalVariable *Global);
@@ -1134,7 +1164,7 @@ public:
 
   /// Create a placeholder instruction with an unset global reference.
   GlobalAddrInst(SILDebugLocation *DebugLoc, SILType Ty);
-
+  
   /// Return the referenced global variable.
   SILGlobalVariable *getReferencedGlobal() const { return Global; }
   
